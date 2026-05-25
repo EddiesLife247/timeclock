@@ -336,7 +336,7 @@ end
 -- ─────────────────────────────────────────────────────────
 
 local function closeOpenSessions(citizenid)
-        if not Config.AutoClock then return end
+        if Config.AutoClock then return end
 
     debugPrint('closeOpenSessions: checking for open sessions —', citizenid)
     local openSessions = exports.oxmysql:executeSync([[
@@ -381,7 +381,7 @@ local function closeOpenSessions(citizenid)
 end
 
 AddEventHandler('qbx_core:server:playerLoggedOut', function(src)
-        if not Config.AutoClock then return end
+        if Config.AutoClock then return end
 
     debugPrint('event: qbx_core:server:playerLoggedOut | src =', src)
     if isInMulticharacter(src) then
@@ -431,7 +431,7 @@ end)
 -- ─────────────────────────────────────────────────────────
 
 AddEventHandler('ps-multijob:server:JobChanged', function(src, newJob, oldJob)
-        if not Config.AutoClock then return end  -- ADD THIS
+        if Config.AutoClock then return end  -- ADD THIS
     debugPrint('event: ps-multijob:server:JobChanged | src =', src, '| oldJob =', tostring(oldJob), '| newJob =', tostring(newJob))
     local pd = getPlayerData(src)
     if not pd then
@@ -1535,7 +1535,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, newJob)
 
     local src = source
     if not newJob or not newJob.name then return end
-    if not Config.AutoClock then return end
+    if Config.AutoClock then return end
 
     local pd = getPlayerData(src)
     if not pd then
@@ -1635,7 +1635,7 @@ end)
 AddEventHandler('QBCore:UpdatePlayer', function()
     local src = source
     debugPrint('event: QBCore:UpdatePlayer | src =', src)
-    if not Config.AutoClock then return end
+    if Config.AutoClock then return end
 
     local pd = getPlayerData(src)
     if not pd then
@@ -1676,7 +1676,7 @@ AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
         end
         return
     end
-    if not Config.AutoClock then return end
+    if Config.AutoClock then return end
     if isInMulticharacter(src) then
         debugPrint('QBCore:Server:SetDuty: in multicharacter — skipping')
         return
@@ -1750,7 +1750,7 @@ AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
 end)
 
 AddEventHandler('QBCore:Server:OnPlayerUnload', function(source)
-    if not Config.AutoClock then return end  -- ADD THIS
+    if Config.AutoClock then return end  -- ADD THIS
     local src = source
     debugPrint('event: QBCore:Server:OnPlayerUnload | src =', src)
 
