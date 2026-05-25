@@ -1,4 +1,4 @@
--- sc_timeclock/server/main.lua
+-- timeclock/server/main.lua
 
 -- ─────────────────────────────────────────────────────────
 --  Debug helper
@@ -8,21 +8,11 @@ local function debugPrint(...)
     if Config.Debug then
         local args = { ... }
         for i, v in ipairs(args) do args[i] = tostring(v) end
-        print('[sc_timeclock][SERVER] ' .. table.concat(args, ' '))
+        print('[timeclock][SERVER] ' .. table.concat(args, ' '))
     end
 end
 
 local playerCitizenids = {} -- { [src] = citizenid }
--- Cache on every getPlayerData call so we never miss it
-local _originalGetPlayerData = getPlayerData
-getPlayerData = function(src)
-    local pd = _originalGetPlayerData(src)
-    if pd and src and not playerCitizenids[src] then
-        playerCitizenids[src] = pd.citizenid
-        debugPrint('playerCitizenids: auto-cached', pd.citizenid, 'for src', src)
-    end
-    return pd
-end
 
 local function getPlayerData(src)
     local player = exports.qbx_core:GetPlayer(src)
@@ -30,7 +20,12 @@ local function getPlayerData(src)
         debugPrint('getPlayerData: GetPlayer returned nil for src =', src)
         return nil
     end
-    return player.PlayerData
+    local pd = player.PlayerData
+    if pd and src and not playerCitizenids[src] then
+        playerCitizenids[src] = pd.citizenid
+        debugPrint('playerCitizenids: auto-cached', pd.citizenid, 'for src', src)
+    end
+    return pd
 end
 
 local function findOnlineSource(targetCitizenid)
@@ -48,7 +43,7 @@ end
 
 local function isInMulticharacter(src)
     local ok, result = pcall(function()
-        return exports['op-multicharacter']:isPlayerInsideMulticharacter(src)
+        return exports[Config.multiCharacter]:isPlayerInsideMulticharacter(src)
     end)
     local inMulti = ok and result == true
     debugPrint('isInMulticharacter: src =', src, '| result =', tostring(inMulti), '| pcall ok =', tostring(ok))
@@ -124,7 +119,7 @@ local function getMultijobData(citizenid)
     end)
 
     if not dbOk then
-        print(('[sc_timeclock] WARNING: multijob query failed for %s'):format(citizenid))
+        print(('[timeclock] WARNING: multijob query failed for %s'):format(citizenid))
         debugPrint('getMultijobData: DB query pcall failed for', citizenid)
         return {}
     end
@@ -382,7 +377,7 @@ local function closeOpenSessions(citizenid)
         end
     end
 
-    print(('[sc_timeclock] Auto closed open sessions for %s'):format(citizenid))
+    print(('[timeclock] Auto closed open sessions for %s'):format(citizenid))
 end
 
 AddEventHandler('qbx_core:server:playerLoggedOut', function(src)
@@ -436,6 +431,7 @@ end)
 -- ─────────────────────────────────────────────────────────
 
 AddEventHandler('ps-multijob:server:JobChanged', function(src, newJob, oldJob)
+        if not Config.AutoClock then return end  -- ADD THIS
     debugPrint('event: ps-multijob:server:JobChanged | src =', src, '| oldJob =', tostring(oldJob), '| newJob =', tostring(newJob))
     local pd = getPlayerData(src)
     if not pd then
@@ -465,7 +461,7 @@ AddEventHandler('ps-multijob:server:JobChanged', function(src, newJob, oldJob)
                 description = ('Auto clocked out of %s. Total: %s'):format(cfg.label, hms),
                 duration    = 5000,
             })
-            TriggerClientEvent('sc_timeclock:client:updateStatus', src, oldJob, false)
+            TriggerClientEvent('timeclock:client:updateStatus', src, oldJob, false)
             sendWebhook(cfg.webhook, buildEmbed(
                 '🔄 Job Swap — Shift Ended — ' .. cfg.label,
                 ('**%s** clocked out of %s (job swap) | Total: **%s**'):format(name, cfg.label, hms),
@@ -498,7 +494,7 @@ AddEventHandler('ps-multijob:server:JobChanged', function(src, newJob, oldJob)
                 description = ('Auto clocked in to %s.'):format(cfg.label),
                 duration    = 5000,
             })
-            TriggerClientEvent('sc_timeclock:client:updateStatus', src, newJob, true)
+            TriggerClientEvent('timeclock:client:updateStatus', src, newJob, true)
             sendWebhook(cfg.webhook, buildEmbed(
                 '🔄 Job Swap — Shift Started — ' .. cfg.label,
                 ('**%s** clocked in to %s (job swap)'):format(name, cfg.label),
@@ -521,9 +517,9 @@ end)
 --  Clock In
 -- ─────────────────────────────────────────────────────────
 
-RegisterNetEvent('sc_timeclock:server:clockIn', function(job, forcedBy)
+RegisterNetEvent('timeclock:server:clockIn', function(job, forcedBy)
     local src = source
-    debugPrint('event: sc_timeclock:server:clockIn | src =', src, '| job =', job, '| forcedBy =', tostring(forcedBy))
+    debugPrint('event: timeclock:server:clockIn | src =', src, '| job =', job, '| forcedBy =', tostring(forcedBy))
     local pd  = getPlayerData(src)
     if not pd then
         debugPrint('clockIn: no PlayerData for src', src, '— aborting')
@@ -556,7 +552,7 @@ RegisterNetEvent('sc_timeclock:server:clockIn', function(job, forcedBy)
     )
 
     TriggerClientEvent('ox_lib:notify', src, { type = 'success', description = Config.Locale.clockedIn })
-    TriggerClientEvent('sc_timeclock:client:updateStatus', src, job, true)
+    TriggerClientEvent('timeclock:client:updateStatus', src, job, true)
 
     local cfg = Config.Jobs[job]
     sendWebhook(cfg.webhook, buildEmbed(
@@ -569,16 +565,16 @@ RegisterNetEvent('sc_timeclock:server:clockIn', function(job, forcedBy)
             { name = 'Time',      value = ('<t:%d:t>'):format(os.time()),    inline = true },
         }
     ))
-    print(('[sc_timeclock] %s clocked IN for %s%s'):format(citizenid, job, forcedBy and (' (forced by '..forcedBy..')') or ''))
+    print(('[timeclock] %s clocked IN for %s%s'):format(citizenid, job, forcedBy and (' (forced by '..forcedBy..')') or ''))
 end)
 
 -- ─────────────────────────────────────────────────────────
 --  Clock Out
 -- ─────────────────────────────────────────────────────────
 
-RegisterNetEvent('sc_timeclock:server:clockOut', function(job, forcedBy)
+RegisterNetEvent('timeclock:server:clockOut', function(job, forcedBy)
     local src = source
-    debugPrint('event: sc_timeclock:server:clockOut | src =', src, '| job =', job, '| forcedBy =', tostring(forcedBy))
+    debugPrint('event: timeclock:server:clockOut | src =', src, '| job =', job, '| forcedBy =', tostring(forcedBy))
     local pd  = getPlayerData(src)
     if not pd then
         debugPrint('clockOut: no PlayerData for src', src, '— aborting')
@@ -620,7 +616,7 @@ RegisterNetEvent('sc_timeclock:server:clockOut', function(job, forcedBy)
         description = string.format(Config.Locale.clockedOut, hms),
         duration    = 6000,
     })
-    TriggerClientEvent('sc_timeclock:client:updateStatus', src, job, false)
+    TriggerClientEvent('timeclock:client:updateStatus', src, job, false)
 
     local cfg = Config.Jobs[job]
     sendWebhook(cfg.webhook, buildEmbed(
@@ -638,14 +634,14 @@ RegisterNetEvent('sc_timeclock:server:clockOut', function(job, forcedBy)
         '🔴 Shift Ended — ' .. cfg.label,
         ('You have clocked out of **%s**.\n\nTotal hours on record: **%s**'):format(cfg.label, hms)
     )
-    print(('[sc_timeclock] %s clocked OUT for %s (total %s)%s'):format(citizenid, job, hms, forcedBy and (' (forced by '..forcedBy..')') or ''))
+    print(('[timeclock] %s clocked OUT for %s (total %s)%s'):format(citizenid, job, hms, forcedBy and (' (forced by '..forcedBy..')') or ''))
 end)
 
 -- ─────────────────────────────────────────────────────────
 --  Callback: boss status per job
 -- ─────────────────────────────────────────────────────────
 
-lib.callback.register('sc_timeclock:getBossStatus', function(source)
+lib.callback.register('timeclock:getBossStatus', function(source)
     debugPrint('callback: getBossStatus | src =', source)
     local pd = getPlayerData(source)
     if not pd then
@@ -690,7 +686,7 @@ end)
 --  Callback: clock status for all player's configured jobs
 -- ─────────────────────────────────────────────────────────
 
-lib.callback.register('sc_timeclock:getMyStatus', function(source)
+lib.callback.register('timeclock:getMyStatus', function(source)
     debugPrint('callback: getMyStatus | src =', source)
     local pd = getPlayerData(source)
     if not pd then
@@ -792,7 +788,7 @@ end
 --  Callback: employee list for boss menus
 -- ─────────────────────────────────────────────────────────
 
-lib.callback.register('sc_timeclock:getEmployees', function(source, job)
+lib.callback.register('timeclock:getEmployees', function(source, job)
     debugPrint('callback: getEmployees | src =', source, '| job =', job)
     local pd  = getPlayerData(source)
     local cfg = Config.Jobs[job]
@@ -811,7 +807,7 @@ end)
 --  Management: Adjust employee time
 -- ─────────────────────────────────────────────────────────
 
-RegisterNetEvent('sc_timeclock:server:adjustTime', function(job, targetCitizenid, action, seconds)
+RegisterNetEvent('timeclock:server:adjustTime', function(job, targetCitizenid, action, seconds)
     local src = source
     debugPrint('event: adjustTime | src =', src, '| job =', job, '| target =', targetCitizenid, '| action =', action, '| seconds =', tostring(seconds))
     local pd  = getPlayerData(src)
@@ -995,8 +991,8 @@ RegisterCommand('timecheck', function(src, args)
     handleTimecheck(src, targetId)
 end, false)
 
-RegisterNetEvent('sc_timeclock:server:timecheckTarget', function(targetId)
-    debugPrint('event: sc_timeclock:server:timecheckTarget | src =', source, '| targetId =', tostring(targetId))
+RegisterNetEvent('timeclock:server:timecheckTarget', function(targetId)
+    debugPrint('event: timeclock:server:timecheckTarget | src =', source, '| targetId =', tostring(targetId))
     handleTimecheck(source, targetId)
 end)
 
@@ -1004,7 +1000,7 @@ end)
 --  Management: Send total hours webhook
 -- ─────────────────────────────────────────────────────────
 
-RegisterNetEvent('sc_timeclock:server:sendTotalHours', function(job)
+RegisterNetEvent('timeclock:server:sendTotalHours', function(job)
     local src = source
     debugPrint('event: sendTotalHours | src =', src, '| job =', job)
     local pd  = getPlayerData(src)
@@ -1088,7 +1084,7 @@ end)
 --  Management: Reset all clocks
 -- ─────────────────────────────────────────────────────────
 
-RegisterNetEvent('sc_timeclock:server:resetClocks', function(job)
+RegisterNetEvent('timeclock:server:resetClocks', function(job)
     local src = source
     debugPrint('event: resetClocks | src =', src, '| job =', job)
     local pd  = getPlayerData(src)
@@ -1117,14 +1113,14 @@ RegisterNetEvent('sc_timeclock:server:resetClocks', function(job)
         Config.Colors.reset
     ))
     TriggerClientEvent('ox_lib:notify', src, { type = 'success', description = Config.Locale.resetDone })
-    print(('[sc_timeclock] %s reset all clocks for job: %s'):format(pd.citizenid, job))
+    print(('[timeclock] %s reset all clocks for job: %s'):format(pd.citizenid, job))
 end)
 
 -- ─────────────────────────────────────────────────────────
 --  Management: Force clock in/out
 -- ─────────────────────────────────────────────────────────
 
-RegisterNetEvent('sc_timeclock:server:forceClockIn', function(job, targetCitizenid)
+RegisterNetEvent('timeclock:server:forceClockIn', function(job, targetCitizenid)
     local src = source
     debugPrint('event: forceClockIn | src =', src, '| job =', job, '| target =', targetCitizenid)
     local pd  = getPlayerData(src)
@@ -1154,7 +1150,7 @@ RegisterNetEvent('sc_timeclock:server:forceClockIn', function(job, targetCitizen
     if targetSrc then
         debugPrint('forceClockIn: notifying target src =', targetSrc)
         TriggerClientEvent('ox_lib:notify', targetSrc, { type = 'inform', description = Config.Locale.forceClockIn })
-        TriggerClientEvent('sc_timeclock:client:updateStatus', targetSrc, job, true)
+        TriggerClientEvent('timeclock:client:updateStatus', targetSrc, job, true)
     else
         debugPrint('forceClockIn: target not online — skipping notify')
     end
@@ -1170,7 +1166,7 @@ RegisterNetEvent('sc_timeclock:server:forceClockIn', function(job, targetCitizen
     ))
 end)
 
-RegisterNetEvent('sc_timeclock:server:forceClockOut', function(job, targetCitizenid)
+RegisterNetEvent('timeclock:server:forceClockOut', function(job, targetCitizenid)
     local src = source
     debugPrint('event: forceClockOut | src =', src, '| job =', job, '| target =', targetCitizenid)
     local pd  = getPlayerData(src)
@@ -1201,7 +1197,7 @@ RegisterNetEvent('sc_timeclock:server:forceClockOut', function(job, targetCitize
     if targetSrc then
         debugPrint('forceClockOut: notifying target src =', targetSrc)
         TriggerClientEvent('ox_lib:notify', targetSrc, { type = 'inform', description = Config.Locale.forceClockOut })
-        TriggerClientEvent('sc_timeclock:client:updateStatus', targetSrc, job, false)
+        TriggerClientEvent('timeclock:client:updateStatus', targetSrc, job, false)
     else
         debugPrint('forceClockOut: target not online — skipping notify')
     end
@@ -1231,11 +1227,11 @@ end)
 
 RegisterCommand('generatereports', function(source, args)
     if source ~= 0 then
-        print('[sc_timeclock] generatereports can only be run from the server console.')
+        print('[timeclock] generatereports can only be run from the server console.')
         return
     end
 
-    print('[sc_timeclock] Generating reports for all configured jobs...')
+    print('[timeclock] Generating reports for all configured jobs...')
     debugPrint('generatereports: starting run')
 
     local now = os.time()
@@ -1245,10 +1241,10 @@ RegisterCommand('generatereports', function(source, args)
         local employees = fetchEmployees(jobName)
 
         if not employees or #employees == 0 then
-            print(('[sc_timeclock] %s — no employees found, skipping.'):format(jobName))
+            print(('[timeclock] %s — no employees found, skipping.'):format(jobName))
             debugPrint('generatereports: no employees for', jobName, '— skipping')
         else
-            print(('[sc_timeclock] %s — sending report for %d employee(s)...'):format(jobName, #employees))
+            print(('[timeclock] %s — sending report for %d employee(s)...'):format(jobName, #employees))
             debugPrint('generatereports: building embeds for', #employees, 'employee(s) —', jobName)
 
             local embeds = {}
@@ -1263,7 +1259,7 @@ RegisterCommand('generatereports', function(source, args)
 
             for i, emp in ipairs(employees) do
                 if i > 9 then
-                    print(('[sc_timeclock] %s — more than 9 employees, truncated to first 9 in this batch.'):format(jobName))
+                    print(('[timeclock] %s — more than 9 employees, truncated to first 9 in this batch.'):format(jobName))
                     debugPrint('generatereports: truncating at 9 for', jobName)
                     break
                 end
@@ -1299,10 +1295,10 @@ RegisterCommand('generatereports', function(source, args)
 
             PerformHttpRequest(cfg.webhook, function(statusCode)
                 if statusCode == 204 then
-                    print(('[sc_timeclock] %s — report sent successfully.'):format(jobName))
+                    print(('[timeclock] %s — report sent successfully.'):format(jobName))
                     debugPrint('generatereports: webhook 204 OK for', jobName)
                 else
-                    print(('[sc_timeclock] %s — webhook returned status %s, check the URL.'):format(jobName, tostring(statusCode)))
+                    print(('[timeclock] %s — webhook returned status %s, check the URL.'):format(jobName, tostring(statusCode)))
                     debugPrint('generatereports: webhook returned', statusCode, 'for', jobName)
                 end
             end, 'POST',
@@ -1314,7 +1310,7 @@ RegisterCommand('generatereports', function(source, args)
         Wait(1500)
     end
 
-    print('[sc_timeclock] All reports dispatched.')
+    print('[timeclock] All reports dispatched.')
     debugPrint('generatereports: complete')
 end, true)
 
@@ -1342,7 +1338,7 @@ exports('ClockIn', function(citizenid, job, forcedBy)
     local src = findOnlineSource(citizenid)
     if src then
         TriggerClientEvent('ox_lib:notify', src, { type = 'success', description = Config.Locale.clockedIn })
-        TriggerClientEvent('sc_timeclock:client:updateStatus', src, job, true)
+        TriggerClientEvent('timeclock:client:updateStatus', src, job, true)
     end
 
     sendWebhook(cfg.webhook, buildEmbed(
@@ -1357,7 +1353,7 @@ exports('ClockIn', function(citizenid, job, forcedBy)
         }
     ))
 
-    print(('[sc_timeclock] [export] %s clocked IN for %s (by %s)'):format(citizenid, job, forcedBy or 'external'))
+    print(('[timeclock] [export] %s clocked IN for %s (by %s)'):format(citizenid, job, forcedBy or 'external'))
     return true
 end)
 
@@ -1391,7 +1387,7 @@ exports('ClockOut', function(citizenid, job, forcedBy)
             description = string.format(Config.Locale.clockedOut, hms),
             duration    = 6000,
         })
-        TriggerClientEvent('sc_timeclock:client:updateStatus', src, job, false)
+        TriggerClientEvent('timeclock:client:updateStatus', src, job, false)
     end
 
     sendWebhook(cfg.webhook, buildEmbed(
@@ -1407,7 +1403,7 @@ exports('ClockOut', function(citizenid, job, forcedBy)
         }
     ))
 
-    print(('[sc_timeclock] [export] %s clocked OUT for %s (by %s) total %s'):format(citizenid, job, forcedBy or 'external', hms))
+    print(('[timeclock] [export] %s clocked OUT for %s (by %s) total %s'):format(citizenid, job, forcedBy or 'external', hms))
     return true, hms
 end)
 
@@ -1455,7 +1451,7 @@ exports('AddTime', function(citizenid, job, seconds, addedBy)
 
     local newHMS = secondsToHMS(getTotalSeconds(citizenid, job))
     debugPrint('export AddTime: new total =', newHMS)
-    print(('[sc_timeclock] [export] Added %s to %s for %s. New total: %s'):format(secondsToHMS(seconds), job, citizenid, newHMS))
+    print(('[timeclock] [export] Added %s to %s for %s. New total: %s'):format(secondsToHMS(seconds), job, citizenid, newHMS))
     return true, newHMS
 end)
 
@@ -1491,7 +1487,7 @@ exports('DeductTime', function(citizenid, job, seconds, deductedBy)
 
     local newHMS = secondsToHMS(getTotalSeconds(citizenid, job))
     debugPrint('export DeductTime: done — remaining undeducted =', remaining, '| new total =', newHMS)
-    print(('[sc_timeclock] [export] Deducted from %s for %s. New total: %s'):format(job, citizenid, newHMS))
+    print(('[timeclock] [export] Deducted from %s for %s. New total: %s'):format(job, citizenid, newHMS))
     return true, newHMS, remaining
 end)
 
@@ -1513,7 +1509,7 @@ exports('ResetClocks', function(job, resetBy)
     ))
 
     debugPrint('export ResetClocks: done for', job)
-    print(('[sc_timeclock] [export] Clocks reset for %s by %s'):format(job, resetBy or 'external'))
+    print(('[timeclock] [export] Clocks reset for %s by %s'):format(job, resetBy or 'external'))
     return true
 end)
 
@@ -1581,7 +1577,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, newJob)
             local cfg  = Config.Jobs[jobName]
             local name = pd.charinfo and (pd.charinfo.firstname .. ' ' .. pd.charinfo.lastname) or pd.citizenid
             TriggerClientEvent('ox_lib:notify', src, { type = 'success', description = ('Clocked in to %s (on duty).'):format(cfg.label) })
-            TriggerClientEvent('sc_timeclock:client:updateStatus', src, jobName, true)
+            TriggerClientEvent('timeclock:client:updateStatus', src, jobName, true)
             sendWebhook(cfg.webhook, buildEmbed(
                 '🟢 Shift Started (On Duty)',
                 ('**%s** went on duty for %s'):format(name, cfg.label),
@@ -1592,7 +1588,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, newJob)
                     { name = 'Time',      value = ('<t:%d:t>'):format(os.time()),  inline = true },
                 }
             ))
-            print(('[sc_timeclock] %s clocked IN (duty on) for %s'):format(pd.citizenid, jobName))
+            print(('[timeclock] %s clocked IN (duty on) for %s'):format(pd.citizenid, jobName))
         else
             debugPrint('QBCore:Server:OnJobUpdate: already clocked in — skipping')
         end
@@ -1613,7 +1609,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, newJob)
                 description = ('Clocked out of %s (off duty). Total: %s'):format(cfg.label, hms),
                 duration    = 6000,
             })
-            TriggerClientEvent('sc_timeclock:client:updateStatus', src, jobName, false)
+            TriggerClientEvent('timeclock:client:updateStatus', src, jobName, false)
             sendWebhook(cfg.webhook, buildEmbed(
                 '🔴 Shift Ended (Off Duty)',
                 ('**%s** went off duty for %s | Total: **%s**'):format(name, cfg.label, hms),
@@ -1625,7 +1621,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, newJob)
                     { name = 'Total Hours', value = hms,                            inline = false },
                 }
             ))
-            print(('[sc_timeclock] %s clocked OUT (duty off) for %s total %s'):format(pd.citizenid, jobName, hms))
+            print(('[timeclock] %s clocked OUT (duty off) for %s total %s'):format(pd.citizenid, jobName, hms))
         else
             debugPrint('QBCore:Server:OnJobUpdate: not clocked in — skipping clock out')
         end
@@ -1702,7 +1698,7 @@ AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
             local cfg  = Config.Jobs[jobName]
             local name = pd.charinfo and (pd.charinfo.firstname .. ' ' .. pd.charinfo.lastname) or pd.citizenid
             TriggerClientEvent('ox_lib:notify', src, { type = 'success', description = ('Clocked in to %s (on duty).'):format(cfg.label) })
-            TriggerClientEvent('sc_timeclock:client:updateStatus', src, jobName, true)
+            TriggerClientEvent('timeclock:client:updateStatus', src, jobName, true)
             sendWebhook(cfg.webhook, buildEmbed(
                 '🟢 Shift Started (On Duty)',
                 ('**%s** went on duty for %s'):format(name, cfg.label),
@@ -1713,7 +1709,7 @@ AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
                     { name = 'Time',      value = ('<t:%d:t>'):format(os.time()),  inline = true },
                 }
             ))
-            print(('[sc_timeclock] %s clocked IN (duty on) for %s'):format(pd.citizenid, jobName))
+            print(('[timeclock] %s clocked IN (duty on) for %s'):format(pd.citizenid, jobName))
         else
             debugPrint('QBCore:Server:SetDuty: already clocked in — skipping')
         end
@@ -1734,7 +1730,7 @@ AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
                 description = ('Clocked out of %s (off duty). Total: %s'):format(cfg.label, hms),
                 duration    = 6000,
             })
-            TriggerClientEvent('sc_timeclock:client:updateStatus', src, jobName, false)
+            TriggerClientEvent('timeclock:client:updateStatus', src, jobName, false)
             sendWebhook(cfg.webhook, buildEmbed(
                 '🔴 Shift Ended (Off Duty)',
                 ('**%s** went off duty for %s | Total: **%s**'):format(name, cfg.label, hms),
@@ -1746,7 +1742,7 @@ AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
                     { name = 'Total Hours', value = hms,                            inline = false },
                 }
             ))
-            print(('[sc_timeclock] %s clocked OUT (duty off) for %s total %s'):format(pd.citizenid, jobName, hms))
+            print(('[timeclock] %s clocked OUT (duty off) for %s total %s'):format(pd.citizenid, jobName, hms))
         else
             debugPrint('QBCore:Server:SetDuty: not clocked in — skipping clock out')
         end
@@ -1754,6 +1750,7 @@ AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
 end)
 
 AddEventHandler('QBCore:Server:OnPlayerUnload', function(source)
+    if not Config.AutoClock then return end  -- ADD THIS
     local src = source
     debugPrint('event: QBCore:Server:OnPlayerUnload | src =', src)
 
@@ -1772,7 +1769,7 @@ AddEventHandler('QBCore:Server:OnPlayerUnload', function(source)
         local ok, offlinePlayer = pcall(function()
             return exports.qbx_core:GetOfflinePlayer(src)
         end)
-        if ok and offlinePlayer and offlinePlayer.PlayerData and Config.AutoClock then
+        if ok and offlinePlayer and offlinePlayer.PlayerData then
             debugPrint('QBCore:Server:OnPlayerUnload: got offline PlayerData for', offlinePlayer.PlayerData.citizenid)
             closeOpenSessions(offlinePlayer.PlayerData.citizenid)
         else
@@ -1784,10 +1781,10 @@ end)
 
 -- ─────────────────────────────────────────────────────────
 --  Admin: open management menu for any configured job
---  Requires 'sc_timeclock.admin' ace permission
+--  Requires 'timeclock.admin' ace permission
 -- ─────────────────────────────────────────────────────────
 
-RegisterNetEvent('sc_timeclock:server:adminOpenMenu', function(job)
+RegisterNetEvent('timeclock:server:adminOpenMenu', function(job)
     local src = source
     debugPrint('event: adminOpenMenu | src =', src, '| job =', job)
 
@@ -1798,20 +1795,20 @@ RegisterNetEvent('sc_timeclock:server:adminOpenMenu', function(job)
     end
 
     if not IsPlayerAceAllowed(src, 'admin') then
-        debugPrint('adminOpenMenu: src', src, 'does not have sc_timeclock.admin ace — denying')
+        debugPrint('adminOpenMenu: src', src, 'does not have timeclock.admin ace — denying')
         TriggerClientEvent('ox_lib:notify', src, { type = 'error', description = 'No permission.' })
         return
     end
 
     debugPrint('adminOpenMenu: ace check passed for src', src, '— opening menu for job =', job)
-    TriggerClientEvent('sc_timeclock:client:adminOpenMenu', src, job)
+    TriggerClientEvent('timeclock:client:adminOpenMenu', src, job)
 end)
 
 -- ─────────────────────────────────────────────────────────
 --  /managetimesheet — server validates boss status
 -- ─────────────────────────────────────────────────────────
 
-RegisterNetEvent('sc_timeclock:server:requestManageMenu', function()
+RegisterNetEvent('timeclock:server:requestManageMenu', function()
     local src = source
     debugPrint('event: requestManageMenu | src =', src)
 
@@ -1836,7 +1833,7 @@ RegisterNetEvent('sc_timeclock:server:requestManageMenu', function()
     end
 
     debugPrint('requestManageMenu: sending', #bossJobs, 'boss job(s) to client')
-    TriggerClientEvent('sc_timeclock:client:openManageMenu', src, bossJobs)
+    TriggerClientEvent('timeclock:client:openManageMenu', src, bossJobs)
 end)
 
 RegisterNetEvent('QBCore:Server:OnPlayerLoaded', function()
@@ -1877,7 +1874,7 @@ RegisterNetEvent('QBCore:Server:OnPlayerLoaded', function()
                     description = ('Auto clocked in to %s (on duty).'):format(cfg.label),
                     duration    = 5000,
                 })
-                TriggerClientEvent('sc_timeclock:client:updateStatus', src, jobName, true)
+                TriggerClientEvent('timeclock:client:updateStatus', src, jobName, true)
                 sendWebhook(cfg.webhook, buildEmbed(
                     '🟢 Shift Resumed (Login)',
                     ('**%s** logged in on duty for %s'):format(name, cfg.label),
@@ -1888,7 +1885,7 @@ RegisterNetEvent('QBCore:Server:OnPlayerLoaded', function()
                         { name = 'Time',      value = ('<t:%d:t>'):format(os.time()),  inline = true },
                     }
                 ))
-                print(('[sc_timeclock] %s auto clocked IN (login on duty) for %s'):format(pd.citizenid, jobName))
+                print(('[timeclock] %s auto clocked IN (login on duty) for %s'):format(pd.citizenid, jobName))
             end
         end
     end
