@@ -19,7 +19,12 @@ server_scripts {
 client_scripts {
     'client/main.lua',
 }
+escrow_ignore {
+    'config.lua',
+    'install.sql',        -- was incorrectly 'closedroads.lua'
+    'README.md',        -- was incorrectly 'closedroads.lua'
 
+}
 dependencies {
     'oxmysql',
     'ox_lib',
