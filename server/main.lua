@@ -336,7 +336,7 @@ end
 -- ─────────────────────────────────────────────────────────
 
 local function closeOpenSessions(citizenid)
-        if Config.AutoClock then return end
+        if not Config.AutoClock then return end
 
     debugPrint('closeOpenSessions: checking for open sessions —', citizenid)
     local openSessions = exports.oxmysql:executeSync([[
@@ -381,7 +381,7 @@ local function closeOpenSessions(citizenid)
 end
 
 AddEventHandler('qbx_core:server:playerLoggedOut', function(src)
-        if Config.AutoClock then return end
+        if not Config.AutoClock then return end
 
     debugPrint('event: qbx_core:server:playerLoggedOut | src =', src)
     if isInMulticharacter(src) then
@@ -431,7 +431,7 @@ end)
 -- ─────────────────────────────────────────────────────────
 
 AddEventHandler('ps-multijob:server:JobChanged', function(src, newJob, oldJob)
-        if Config.AutoClock then return end  -- ADD THIS
+        if not Config.AutoClock then return end  -- ADD THIS
     debugPrint('event: ps-multijob:server:JobChanged | src =', src, '| oldJob =', tostring(oldJob), '| newJob =', tostring(newJob))
     local pd = getPlayerData(src)
     if not pd then
@@ -1531,22 +1531,19 @@ end)
 -- ─────────────────────────────────────────────────────────
 
 AddEventHandler('QBCore:Server:OnJobUpdate', function(source, newJob)
-    debugPrint('event: QBCore:Server:OnJobUpdate | src =', source, '| job =', tostring(newJob and newJob.name), '| onduty =', tostring(newJob and newJob.onduty))
-
     local src = source
     if not newJob or not newJob.name then return end
-    if Config.AutoClock then return end
+    if not Config.AutoClock then return end
+
+    debugPrint('event: QBCore:Server:OnJobUpdate | src =', src, '| job =', newJob.name, '| onduty =', tostring(newJob.onduty))
 
     local pd = getPlayerData(src)
     if not pd then
-        debugPrint('QBCore:Server:OnJobUpdate: no PlayerData — player likely disconnecting, closing open sessions')
         local ok, offlinePlayer = pcall(function()
             return exports.qbx_core:GetOfflinePlayer(src)
         end)
         if ok and offlinePlayer and offlinePlayer.PlayerData then
             closeOpenSessions(offlinePlayer.PlayerData.citizenid)
-        else
-            debugPrint('QBCore:Server:OnJobUpdate: could not retrieve offline player — sessions may already be closed')
         end
         return
     end
@@ -1557,17 +1554,10 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, newJob)
     end
 
     local jobName = newJob.name
-    if not Config.Jobs[jobName] then
-        debugPrint('QBCore:Server:OnJobUpdate: job not in Config.Jobs —', jobName)
-        return
-    end
 
-    if newJob.onduty then
-        -- Extra guard: don't clock in if player is no longer connected
-        if not GetPlayerName(src) then
-            debugPrint('QBCore:Server:OnJobUpdate: player no longer connected — skipping clock in')
-            return
-        end
+    -- Going on duty for a configured job
+    if Config.Jobs[jobName] and newJob.onduty then
+        if not GetPlayerName(src) then return end
         if not isPlayerClockedIn(pd.citizenid, jobName) then
             debugPrint('QBCore:Server:OnJobUpdate: going on duty — clocking in', pd.citizenid, jobName)
             exports.oxmysql:execute(
@@ -1583,33 +1573,48 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, newJob)
                 ('**%s** went on duty for %s'):format(name, cfg.label),
                 Config.Colors.clockIn,
                 {
-                    { name = 'CitizenID', value = pd.citizenid,                   inline = true },
-                    { name = 'Job',       value = cfg.label,                      inline = true },
-                    { name = 'Time',      value = ('<t:%d:t>'):format(os.time()),  inline = true },
+                    { name = 'CitizenID', value = pd.citizenid,                  inline = true },
+                    { name = 'Job',       value = cfg.label,                     inline = true },
+                    { name = 'Time',      value = ('<t:%d:t>'):format(os.time()), inline = true },
                 }
             ))
             print(('[timeclock] %s clocked IN (duty on) for %s'):format(pd.citizenid, jobName))
         else
             debugPrint('QBCore:Server:OnJobUpdate: already clocked in — skipping')
         end
-    else
-        local sessionId, _ = getClockInTime(pd.citizenid, jobName)
-        if sessionId then
-            debugPrint('QBCore:Server:OnJobUpdate: going off duty — clocking out', pd.citizenid, jobName)
-            exports.oxmysql:execute(
-                'UPDATE timeclock_sessions SET clock_out = NOW(), duration_secs = TIMESTAMPDIFF(SECOND, clock_in, NOW()), forced_by = COALESCE(forced_by, ?) WHERE id = ?',
-                { 'duty_off', sessionId }
-            )
-            local totalSecs = getTotalSeconds(pd.citizenid, jobName)
+        return
+    end
+
+    -- Job changed to unconfigured job OR going off duty — close any open sessions
+    -- We don't know which job they left, so check all open sessions in the DB
+    debugPrint('QBCore:Server:OnJobUpdate: job not configured or off duty — closing any open sessions for', pd.citizenid)
+    local openSessions = exports.oxmysql:executeSync([[
+        SELECT id, job FROM timeclock_sessions
+        WHERE citizenid = ? AND clock_out IS NULL
+    ]], { pd.citizenid })
+
+    if not openSessions or #openSessions == 0 then
+        debugPrint('QBCore:Server:OnJobUpdate: no open sessions to close')
+        return
+    end
+
+    for _, session in ipairs(openSessions) do
+        debugPrint('QBCore:Server:OnJobUpdate: closing open session for job =', session.job)
+        exports.oxmysql:execute(
+            'UPDATE timeclock_sessions SET clock_out = NOW(), duration_secs = TIMESTAMPDIFF(SECOND, clock_in, NOW()), forced_by = COALESCE(forced_by, ?) WHERE id = ?',
+            { 'duty_off', session.id }
+        )
+        local cfg = Config.Jobs[session.job]
+        if cfg then
+            local totalSecs = getTotalSeconds(pd.citizenid, session.job)
             local hms       = secondsToHMS(totalSecs)
-            local cfg       = Config.Jobs[jobName]
             local name      = pd.charinfo and (pd.charinfo.firstname .. ' ' .. pd.charinfo.lastname) or pd.citizenid
             TriggerClientEvent('ox_lib:notify', src, {
                 type        = 'inform',
                 description = ('Clocked out of %s (off duty). Total: %s'):format(cfg.label, hms),
                 duration    = 6000,
             })
-            TriggerClientEvent('timeclock:client:updateStatus', src, jobName, false)
+            TriggerClientEvent('timeclock:client:updateStatus', src, session.job, false)
             sendWebhook(cfg.webhook, buildEmbed(
                 '🔴 Shift Ended (Off Duty)',
                 ('**%s** went off duty for %s | Total: **%s**'):format(name, cfg.label, hms),
@@ -1621,9 +1626,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, newJob)
                     { name = 'Total Hours', value = hms,                            inline = false },
                 }
             ))
-            print(('[timeclock] %s clocked OUT (duty off) for %s total %s'):format(pd.citizenid, jobName, hms))
-        else
-            debugPrint('QBCore:Server:OnJobUpdate: not clocked in — skipping clock out')
+            print(('[timeclock] %s clocked OUT (duty off) for %s total %s'):format(pd.citizenid, session.job, hms))
         end
     end
 end)
@@ -1635,7 +1638,7 @@ end)
 AddEventHandler('QBCore:UpdatePlayer', function()
     local src = source
     debugPrint('event: QBCore:UpdatePlayer | src =', src)
-    if Config.AutoClock then return end
+    if not Config.AutoClock then return end
 
     local pd = getPlayerData(src)
     if not pd then
@@ -1662,6 +1665,7 @@ end)
 AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
     local src = source
     debugPrint('event: QBCore:Server:SetDuty | src =', src, '| onDuty =', tostring(onDuty))
+    if not Config.AutoClock then return end
 
     local pd = getPlayerData(src)
     if not pd then
@@ -1676,7 +1680,6 @@ AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
         end
         return
     end
-    if Config.AutoClock then return end
     if isInMulticharacter(src) then
         debugPrint('QBCore:Server:SetDuty: in multicharacter — skipping')
         return
@@ -1750,7 +1753,7 @@ AddEventHandler('QBCore:Server:SetDuty', function(source, onDuty)
 end)
 
 AddEventHandler('QBCore:Server:OnPlayerUnload', function(source)
-    if Config.AutoClock then return end  -- ADD THIS
+    if not Config.AutoClock then return end  -- ADD THIS
     local src = source
     debugPrint('event: QBCore:Server:OnPlayerUnload | src =', src)
 
